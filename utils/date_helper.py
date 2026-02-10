@@ -1,17 +1,19 @@
-"""日付に関するユーティリティ関数."""
+"""日付属性を分析するユーティリティ.
+
+パチスロホールの「強い日」判定に必要な各種フラグを算出する。
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
-from typing import Optional
+from datetime import date, timedelta
+from typing import Any, Optional, Sequence
 
 import holidays
 
-# 日本の祝日カレンダー (キャッシュして再利用)
+# ---------------------------------------------------------------------------
+# 日本の祝日キャッシュ
+# ---------------------------------------------------------------------------
 _JP_HOLIDAYS: dict[int, holidays.Japan] = {}
-
-WEEKDAY_NAMES_JA = ["月", "火", "水", "木", "金", "土", "日"]
 
 
 def _get_jp_holidays(year: int) -> holidays.Japan:
@@ -21,80 +23,65 @@ def _get_jp_holidays(year: int) -> holidays.Japan:
     return _JP_HOLIDAYS[year]
 
 
-@dataclass
-class DateFlags:
-    """日付フラグをまとめたデータクラス.
-
-    Attributes:
-        target_date: 対象日付
-        ones_digit: 日付の1の位 (「Nのつく日」の N)
-        n_tsuku_flag: Nのつく日フラグ — 日付の1の位が N であるか
-        zorome_flag: ゾロ目フラグ (11日, 22日 など)
-        weekday: 曜日 (0=月 .. 6=日)
-        weekday_ja: 曜日の日本語表記
-        is_holiday: 祝日であるか
-        holiday_name: 祝日名 (祝日でなければ None)
-        is_grand_opening: 新装開店フラグ (判定できない場合 None)
-    """
-
-    target_date: date
-    ones_digit: int
-    n_tsuku_flag: dict[int, bool]
-    zorome_flag: bool
-    weekday: int
-    weekday_ja: str
-    is_holiday: bool
-    holiday_name: Optional[str]
-    is_grand_opening: Optional[bool]
-
-
-def analyze_date(
-    target: date,
-    grand_opening_dates: Optional[set[date]] = None,
-) -> DateFlags:
-    """日付を分析し、各種フラグを返す.
+# ---------------------------------------------------------------------------
+# メイン関数
+# ---------------------------------------------------------------------------
+def get_date_attributes(
+    target_date: date,
+    past_dates: Optional[Sequence[date]] = None,
+) -> dict[str, Any]:
+    """日付を分析し、分析属性を辞書で返す.
 
     Args:
-        target: 分析対象の日付.
-        grand_opening_dates: 新装開店の日付セット。渡されなければ
-            is_grand_opening は None になる。
+        target_date: 分析対象の日付。
+        past_dates: 過去にデータが存在する日付のリスト / セット。
+            渡された場合、前日がこのリストに含まれていなければ
+            ``is_post_holiday`` を ``True`` にする。
+            ``None`` の場合は ``False`` を返す。
 
     Returns:
-        DateFlags: 分析結果.
+        dict with keys:
+            - day_suffix (int): 日付の1の位 (0–9)
+            - is_zoro (bool): ゾロ目の日 (11日, 22日 または 月 == 日)
+            - day_of_week (int): 曜日 (0=月 .. 6=日)
+            - is_holiday (bool): 祝日フラグ
+            - holiday_name (str | None): 祝日名 (祝日でなければ None)
+            - is_post_holiday (bool): 前日のデータが存在しない場合 True
     """
-    day = target.day
-    ones_digit = day % 10
+    day = target_date.day
+    month = target_date.month
 
-    # Nのつく日フラグ: 0-9 それぞれについて、日付の1の位が一致するか
-    n_tsuku_flag = {n: (ones_digit == n) for n in range(10)}
+    # day_suffix: 日付の1の位
+    day_suffix: int = day % 10
 
-    # ゾロ目フラグ: 11, 22 のように十の位と一の位が同じ
-    tens_digit = day // 10
-    zorome_flag = tens_digit != 0 and tens_digit == ones_digit
+    # is_zoro: ゾロ目判定
+    #   - 日の十の位と一の位が同じ (11, 22)
+    #   - 月 == 日 (1/1, 2/2, 3/3, ... 9/9)
+    tens = day // 10
+    is_day_zoro = tens != 0 and tens == day_suffix
+    is_month_eq_day = month == day
+    is_zoro: bool = is_day_zoro or is_month_eq_day
 
-    # 曜日
-    weekday = target.weekday()
-    weekday_ja = WEEKDAY_NAMES_JA[weekday]
+    # day_of_week: 曜日 (0=月 .. 6=日)
+    day_of_week: int = target_date.weekday()
 
-    # 祝日判定
-    jp_holidays = _get_jp_holidays(target.year)
-    holiday_name = jp_holidays.get(target)
-    is_holiday = holiday_name is not None
+    # is_holiday: 祝日判定
+    jp_holidays = _get_jp_holidays(target_date.year)
+    holiday_name: str | None = jp_holidays.get(target_date)
+    is_holiday: bool = holiday_name is not None
 
-    # 新装開店
-    if grand_opening_dates is not None:
-        is_grand_opening = target in grand_opening_dates
-    else:
-        is_grand_opening = None
+    # is_post_holiday: 前日データが存在しなければ True
+    is_post_holiday: bool = False
+    if past_dates is not None:
+        yesterday = target_date - timedelta(days=1)
+        past_set = set(past_dates) if not isinstance(past_dates, set) else past_dates
+        is_post_holiday = yesterday not in past_set
 
-    return DateFlags(
-        target_date=target,
-        ones_digit=ones_digit,
-        n_tsuku_flag=n_tsuku_flag,
-        zorome_flag=zorome_flag,
-        weekday=weekday,
-        weekday_ja=weekday_ja,
-        is_holiday=is_holiday,
-        holiday_name=holiday_name,
-        is_grand_opening=is_grand_opening,
-    )
+    return {
+        "day_suffix": day_suffix,
+        "is_zoro": is_zoro,
+        "day_of_week": day_of_week,
+        "is_holiday": is_holiday,
+        "holiday_name": holiday_name,
+        "is_post_holiday": is_post_holiday,
+    }
