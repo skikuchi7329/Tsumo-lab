@@ -20,6 +20,7 @@
 | 全台系検出 | 勝率 75%以上 + 平均差枚 +1,000 以上の日を自動判定 |
 | 機種名名寄せ | 表記揺れ (例: 「L北斗の拳」↔「スマスロ北斗」) を統一集計 |
 | Markdown レポート | 分析結果を見やすいレポートとしてファイル出力 |
+| Web ダッシュボード | Streamlit + Plotly による分析結果の可視化 (Tsumo-Rank グラフ、機種別推移) |
 | 日次バッチ | cron 対応のバッチスクリプトで完全自動運用 |
 
 ---
@@ -54,10 +55,13 @@ python main.py scrape --shop-name 麗都荒川沖
 # 4. 特定店舗のみ分析 + コンソール表示
 python main.py analyze --shop-name 麗都荒川沖 --console
 
-# 5. 日次バッチ (スクレイピング + 分析を一括実行)
+# 5. Web ダッシュボードを起動 (ブラウザで http://localhost:8501)
+python main.py dashboard
+
+# 6. 日次バッチ (スクレイピング + 分析を一括実行)
 python scripts/daily_update.py
 
-# 6. 分析のみバッチ実行
+# 7. 分析のみバッチ実行
 python scripts/daily_update.py --analyze-only
 ```
 
@@ -99,7 +103,8 @@ Tsumo-Rank = (平均差枚 × 0.4) + (勝率 × 10) + (全台系回数 × 100)
 
 ```
 Tsumo-lab/
-├── main.py                    # CLI エントリポイント (scrape / analyze)
+├── main.py                    # CLI エントリポイント (scrape / analyze / dashboard)
+├── app.py                     # Streamlit ダッシュボード
 ├── requirements.txt           # Python 依存パッケージ
 ├── README.md
 │
@@ -181,6 +186,28 @@ python main.py analyze    # 全店舗を分析
 
 ---
 
+## Web ダッシュボード (Tsumo-Lab Web)
+
+Streamlit + Plotly によるインタラクティブなダッシュボード。
+
+```bash
+# 起動
+python main.py dashboard
+
+# ポート指定
+python main.py dashboard --port 8080
+```
+
+ブラウザで `http://localhost:8501` を開くと以下の画面が表示される:
+
+- **サイドバー**: 店舗選択、分析タイプ (特定日/ゾロ目/曜日/新装開店/祝日)、スコア閾値フィルタ
+- **KPI カード**: 総差枚・平均勝率・全台系発生率
+- **Tsumo-Rank グラフ**: 上位機種のスコアを横棒グラフで表示 (プラス差枚=赤、マイナス=青)
+- **実績詳細テーブル**: 全台系実績日を含む機種別データ
+- **機種詳細分析**: 選択した機種の日別差枚推移をラインチャートで表示
+
+---
+
 ## 日次バッチの設定 (cron)
 
 ```bash
@@ -199,6 +226,7 @@ python main.py analyze    # 全店舗を分析
 | 項目 | 内容 |
 |:---|:---|
 | データソース | min-repo.com (みんレポ) |
+| Web UI | Streamlit + Plotly |
 | パーサー | BeautifulSoup4 + lxml |
 | DB | SQLite (WAL モード, UNIQUE 制約で重複防止) |
 | 祝日判定 | `holidays` ライブラリ (日本の祝日) |

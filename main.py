@@ -296,6 +296,23 @@ def cmd_reset_db() -> None:
 
 
 # ---------------------------------------------------------------------------
+# dashboard コマンド
+# ---------------------------------------------------------------------------
+def cmd_dashboard(port: int = 8501) -> None:
+    """Streamlit ダッシュボードを起動する."""
+    import subprocess
+
+    app_path = ROOT_DIR / "app.py"
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", str(app_path),
+        "--server.port", str(port),
+        "--server.headless", "true",
+    ]
+    logger.info("Starting dashboard: %s", " ".join(cmd))
+    subprocess.run(cmd)
+
+
+# ---------------------------------------------------------------------------
 # CLI エントリポイント
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -323,6 +340,12 @@ def main() -> None:
         "--console", action="store_true", help="コンソールにもレポートを表示"
     )
 
+    # dashboard
+    p_dash = sub.add_parser("dashboard", help="Web ダッシュボードを起動")
+    p_dash.add_argument(
+        "--port", type=int, default=8501, help="ポート番号 (デフォルト: 8501)"
+    )
+
     # reset-db
     sub.add_parser("reset-db", help="DB / CSV / URL記録をリセット (汚染データの除去用)")
 
@@ -332,6 +355,8 @@ def main() -> None:
         cmd_scrape(shop_name=args.shop_name, days=args.days)
     elif args.command == "analyze":
         cmd_analyze(shop_name=args.shop_name, console=args.console)
+    elif args.command == "dashboard":
+        cmd_dashboard(port=args.port)
     elif args.command == "reset-db":
         cmd_reset_db()
     else:
