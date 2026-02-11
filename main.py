@@ -192,11 +192,23 @@ def cmd_scrape(shop_name: str | None = None, days: int | None = None) -> None:
 # ---------------------------------------------------------------------------
 # analyze コマンド
 # ---------------------------------------------------------------------------
-def cmd_analyze(shop_id: str | None = None, console: bool = False) -> None:
+def _resolve_shop_id(config: dict, shop_name: str) -> str | None:
+    """店舗名から shop_id を解決する.
+
+    config に一致する店舗があればその shop_id、なければ name をそのまま返す。
+    """
+    for shop in config.get("shops", []):
+        if shop["name"] == shop_name:
+            return shop["shop_id"]
+    # config にない場合: scrape 時に shop_id = name で保存されているはず
+    return shop_name
+
+
+def cmd_analyze(shop_name: str | None = None, console: bool = False) -> None:
     """DB のデータから傾向分析を行い Markdown レポートを出力する.
 
     Args:
-        shop_id: 対象店舗ID (None なら全店舗)
+        shop_name: 対象店舗名 (None なら全店舗)
         console: True ならコンソールにも表示
     """
     config = load_config()
@@ -209,7 +221,8 @@ def cmd_analyze(shop_id: str | None = None, console: bool = False) -> None:
     analyzer = TrendAnalyzer(db)
 
     try:
-        if shop_id:
+        if shop_name:
+            shop_id = _resolve_shop_id(config, shop_name)
             targets = {shop_id: analyzer.analyze(shop_id)}
         else:
             targets = analyzer.analyze_all_shops()
@@ -222,12 +235,12 @@ def cmd_analyze(shop_id: str | None = None, console: bool = False) -> None:
 
         for sid, result in targets.items():
             shop_cfg = shop_map.get(sid, {})
-            shop_name = shop_cfg.get("name", f"Shop {sid}")
+            display_name = shop_cfg.get("name", sid)
             day_suffix_targets = shop_cfg.get("day_suffix_targets")
 
             report_md = generate_report(
                 result,
-                shop_name=shop_name,
+                shop_name=display_name,
                 day_suffix_targets=day_suffix_targets,
             )
 
@@ -303,7 +316,8 @@ def main() -> None:
     # analyze
     p_analyze = sub.add_parser("analyze", help="傾向分析 → レポート出力")
     p_analyze.add_argument(
-        "--shop-id", default=None, help="対象店舗ID (省略で全店舗)"
+        "--shop-name", default=None,
+        help="店舗名 (日本語、例: '麗都荒川沖'。省略で全店舗)",
     )
     p_analyze.add_argument(
         "--console", action="store_true", help="コンソールにもレポートを表示"
@@ -317,7 +331,7 @@ def main() -> None:
     if args.command == "scrape":
         cmd_scrape(shop_name=args.shop_name, days=args.days)
     elif args.command == "analyze":
-        cmd_analyze(shop_id=args.shop_id, console=args.console)
+        cmd_analyze(shop_name=args.shop_name, console=args.console)
     elif args.command == "reset-db":
         cmd_reset_db()
     else:
