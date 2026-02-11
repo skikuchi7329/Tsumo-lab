@@ -2,12 +2,13 @@
 # Tsumo-Lab 設定ファイル
 # ==========================================================================
 # 店舗ごとの基本情報と「強い日」の定義を管理する。
-# tag_name: min-repo.com の URL に使うエンコード済み店舗名
+# name: 店舗名 (日本語そのまま)
+#   → URL エンコードはスクレイパーが自動で行う
+#   → https://min-repo.com/tag/{name}/ が店舗トップページになる
 # day_suffix_targets: その店舗が出玉に力を入れる日の「1の位」(0-9)
 
 shops:
   - name: "麗都荒川沖"
-    tag_name: "%E9%BA%97%E9%83%BD%E8%8D%92%E5%B7%9D%E6%B2%96"
     shop_id: "153"
     area: "茨城県"
     day_suffix_targets: [5, 0]
@@ -26,8 +27,8 @@ shops:
 settings:
   # min-repo.com のベース URL
   base_url: "https://min-repo.com"
-  # タグページ URL テンプレート ({tag_name} が置換される)
-  tag_url_template: "https://min-repo.com/tag/{tag_name}/"
+  # デフォルトの取得日数 (最新の日付からN日分)
+  default_days: 30
   # デフォルトの分析対象日数
   default_lookback_days: 90
   # スクレイピング間隔 (秒)

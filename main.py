@@ -1,7 +1,9 @@
 """Tsumo-Lab メインスクリプト.
 
 コマンド:
-  scrape   — config/config.yaml の全店舗をスクレイピング → SQLite + CSV 保存
+  scrape   — スクレイピング → SQLite + CSV 保存
+             --shop-name: 店舗名 (省略時は config.yaml の全店舗)
+             --days: 取得日数 (省略時は config の default_days)
   analyze  — DB 蓄積データから傾向分析 → Markdown レポート出力
 """
 
@@ -59,26 +61,64 @@ def _fetch_html(url: str, user_agent: str) -> str:
     return resp.text
 
 
-def cmd_scrape() -> None:
-    """全店舗をスクレイピングして SQLite + CSV に保存する."""
+def _resolve_shops(config: dict, shop_name: str | None) -> list[dict]:
+    """スクレイピング対象の店舗リストを返す.
+
+    Args:
+        config: config.yaml の内容
+        shop_name: CLI で指定された店舗名 (None なら config.yaml の全店舗)
+
+    Returns:
+        店舗設定辞書のリスト
+    """
+    if shop_name is None:
+        return config.get("shops", [])
+
+    # CLI 指定の店舗名が config に存在するか探す
+    for shop in config.get("shops", []):
+        if shop["name"] == shop_name:
+            return [shop]
+
+    # config にない店舗名 → 最低限の設定で動的に構築
+    logger.info("Shop '%s' not in config, using defaults", shop_name)
+    return [{
+        "name": shop_name,
+        "shop_id": shop_name,  # shop_id がなければ name で代用
+        "title_keywords": [shop_name],
+    }]
+
+
+def cmd_scrape(shop_name: str | None = None, days: int | None = None) -> None:
+    """店舗をスクレイピングして SQLite + CSV に保存する.
+
+    Args:
+        shop_name: 店舗名 (None なら config.yaml の全店舗)
+        days: 取得日数 (None なら config の default_days)
+    """
     config = load_config()
     settings = config.get("settings", {})
     user_agent = settings.get("user_agent", "")
+
+    # days のデフォルト値: CLI引数 → config → 30
+    if days is None:
+        days = settings.get("default_days", 30)
+
+    shops = _resolve_shops(config, shop_name)
 
     store = FetchedURLStore()
     db = SlotDatabase()
 
     try:
-        for shop in config.get("shops", []):
-            shop_name = shop["name"]
-            shop_id = shop["shop_id"]
-            tag_name = shop["tag_name"]
+        for shop in shops:
+            name = shop["name"]
+            shop_id = shop.get("shop_id", name)
 
-            logger.info("=== Processing shop: %s (ID: %s) ===", shop_name, shop_id)
+            logger.info("=== Processing shop: %s (ID: %s, days: %d) ===", name, shop_id, days)
 
             report_links = fetch_report_urls(
-                tag_name=tag_name,
+                shop_name=name,
                 user_agent=user_agent,
+                days=days,
             )
             logger.info("Found %d report links on tag page", len(report_links))
 
@@ -86,7 +126,7 @@ def cmd_scrape() -> None:
             title_keywords = shop.get("title_keywords")
             report_links = filter_links_by_shop(report_links, title_keywords)
             logger.info(
-                "After shop filter: %d links for %s", len(report_links), shop_name
+                "After shop filter: %d links for %s", len(report_links), name
             )
 
             all_slot_records: list[SlotData] = []
@@ -250,7 +290,15 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     # scrape
-    sub.add_parser("scrape", help="スクレイピング → DB 保存")
+    p_scrape = sub.add_parser("scrape", help="スクレイピング → DB 保存")
+    p_scrape.add_argument(
+        "--shop-name", default=None,
+        help="店舗名 (日本語、例: '麗都荒川沖'。省略で config.yaml の全店舗)",
+    )
+    p_scrape.add_argument(
+        "--days", type=int, default=None,
+        help="最新から何日分取得するか (省略で config の default_days)",
+    )
 
     # analyze
     p_analyze = sub.add_parser("analyze", help="傾向分析 → レポート出力")
@@ -267,13 +315,13 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "scrape":
-        cmd_scrape()
+        cmd_scrape(shop_name=args.shop_name, days=args.days)
     elif args.command == "analyze":
         cmd_analyze(shop_id=args.shop_id, console=args.console)
     elif args.command == "reset-db":
         cmd_reset_db()
     else:
-        # 後方互換: 引数なしは scrape
+        # 後方互換: 引数なしは scrape (config の全店舗)
         cmd_scrape()
 
 

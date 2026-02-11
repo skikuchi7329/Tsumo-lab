@@ -4,6 +4,10 @@ Stage 1: タグページからレポート URL + 日付を取得 (fetch_report_u
 Stage 2: 各レポートページから台別データ + 機種別集計を抽出
          (parse_report_page / parse_machine_stats)
 
+URL 構造:
+  店舗トップ: https://min-repo.com/tag/麗都荒川沖/  (日本語→自動URLエンコード)
+  個別レポート: https://min-repo.com/{id}/  (数値ID、自動取得)
+
 NOTE: CSS セレクタは定数 (SELECTORS) にまとめているので、
       サイト構造が変わった場合はここだけ修正すれば OK。
 """
@@ -15,8 +19,9 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -222,43 +227,84 @@ def fetch_report_urls_from_html(html: str, base_url: str = "https://min-repo.com
     return results
 
 
+def _encode_shop_name(shop_name: str) -> str:
+    """店舗名を URL パスに使える形にエンコードする.
+
+    既にエンコード済み (%XX 形式) の場合はそのまま返す。
+    日本語文字列の場合は urllib.parse.quote でエンコードする。
+
+    例: "麗都荒川沖" → "%E9%BA%97%E9%83%BD%E8%8D%92%E5%B7%9D%E6%B2%96"
+    """
+    if "%" in shop_name:
+        # 既にエンコード済みと判断
+        return shop_name
+    return quote(shop_name, safe="")
+
+
 def fetch_report_urls(
-    tag_name: str,
+    shop_name: str,
     base_url: str = "https://min-repo.com",
     user_agent: str = DEFAULT_UA,
-    max_pages: int = 1,
+    days: int | None = None,
+    max_pages: int = 10,
 ) -> list[ReportLink]:
     """タグページにアクセスしてレポート URL 一覧を返す (ネットワーク版).
 
+    店舗名（日本語）を指定するだけで、URL エンコードを自動で行う。
+    days を指定すると、最新の日付から days 日分のレポートのみ返す。
+    ページネーションも自動で行い、必要な日数分のデータが揃うまでページを辿る。
+
     Args:
-        tag_name: URL エンコード済みの店舗タグ名
+        shop_name: 店舗名 (日本語 or URL エンコード済み、どちらでも可)
         base_url: サイトのベース URL
         user_agent: リクエストに使う User-Agent
-        max_pages: 取得するページ数 (ページネーション対応)
+        days: 取得する日数 (None なら全件)
+        max_pages: 最大ページ数 (安全上限)
 
     Returns:
         日付降順のレポートリンクリスト
     """
+    encoded_name = _encode_shop_name(shop_name)
     session = _create_session(user_agent)
     all_links: list[ReportLink] = []
 
     for page in range(1, max_pages + 1):
         if page == 1:
-            url = f"{base_url}/tag/{tag_name}/"
+            url = f"{base_url}/tag/{encoded_name}/"
         else:
-            url = f"{base_url}/tag/{tag_name}/page/{page}/"
+            url = f"{base_url}/tag/{encoded_name}/page/{page}/"
 
         if page > 1:
             _random_sleep()
 
-        logger.info("Fetching tag page: %s", url)
-        resp = session.get(url, timeout=30)
-        resp.raise_for_status()
+        logger.info("Fetching tag page: %s (page %d)", url, page)
+        try:
+            resp = session.get(url, timeout=30)
+            resp.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if resp.status_code == 404:
+                # ページネーション終端
+                logger.info("Page %d returned 404, stopping pagination", page)
+                break
+            raise
 
         links = fetch_report_urls_from_html(resp.text, base_url)
         if not links:
+            logger.info("No links found on page %d, stopping pagination", page)
             break
         all_links.extend(links)
+
+        # days 指定がある場合: 十分な日数分取れたか判定
+        if days is not None and all_links:
+            all_links_sorted = sorted(all_links, key=lambda r: r.date, reverse=True)
+            newest = all_links_sorted[0].date
+            oldest = all_links_sorted[-1].date
+            if (newest - oldest).days >= days:
+                logger.info(
+                    "Collected %d days of data (target: %d), stopping pagination",
+                    (newest - oldest).days, days,
+                )
+                break
 
     # 重複排除 (URL ベース)
     seen: set[str] = set()
@@ -269,6 +315,17 @@ def fetch_report_urls(
             unique.append(link)
 
     unique.sort(key=lambda r: r.date, reverse=True)
+
+    # days 指定がある場合: 最新日付から days 日以内のみに絞り込む
+    if days is not None and unique:
+        newest_date = unique[0].date
+        cutoff = newest_date - timedelta(days=days)
+        unique = [link for link in unique if link.date >= cutoff]
+        logger.info(
+            "Filtered to %d links within %d days (since %s)",
+            len(unique), days, cutoff.strftime("%Y-%m-%d"),
+        )
+
     return unique
 
 
