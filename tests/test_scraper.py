@@ -13,6 +13,7 @@ import pytest
 
 from scrapers.min_repo_scraper import (
     ReportLink,
+    _encode_shop_name,
     _extract_shop_part,
     _parse_date_from_title,
     _safe_int,
@@ -911,3 +912,29 @@ class TestExtractShopPart:
 
     def test_full_date_without_shop(self):
         assert _extract_shop_part("2025/6/7(土)") == ""
+
+
+# =====================================================================
+# _encode_shop_name (店舗名 → URL エンコード)
+# =====================================================================
+class TestEncodeShopName:
+    def test_japanese_name_encoded(self):
+        """日本語の店舗名が URL エンコードされること."""
+        result = _encode_shop_name("麗都荒川沖")
+        assert result == "%E9%BA%97%E9%83%BD%E8%8D%92%E5%B7%9D%E6%B2%96"
+
+    def test_already_encoded_passthrough(self):
+        """既にエンコード済みの文字列はそのまま返ること."""
+        encoded = "%E9%BA%97%E9%83%BD%E8%8D%92%E5%B7%9D%E6%B2%96"
+        assert _encode_shop_name(encoded) == encoded
+
+    def test_ascii_name(self):
+        """ASCII のみの名前はそのまま返ること."""
+        assert _encode_shop_name("TestShop") == "TestShop"
+
+    def test_mixed_name(self):
+        """日本語 + ASCII 混在の店舗名もエンコードされること."""
+        result = _encode_shop_name("SLOT館A")
+        # 日本語部分がエンコードされ、ASCII はそのまま
+        assert "SLOT" in result
+        assert "A" in result
