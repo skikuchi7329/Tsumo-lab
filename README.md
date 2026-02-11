@@ -48,13 +48,16 @@ python main.py scrape
 # 2. 傾向分析 (DB のデータ → Markdown レポート出力)
 python main.py analyze
 
-# 3. 特定店舗のみ分析 + コンソール表示
-python main.py analyze --shop-id 153 --console
+# 3. 特定店舗のみスクレイピング (店舗名で指定)
+python main.py scrape --shop-name 麗都荒川沖
 
-# 4. 日次バッチ (スクレイピング + 分析を一括実行)
+# 4. 特定店舗のみ分析 + コンソール表示
+python main.py analyze --shop-name 麗都荒川沖 --console
+
+# 5. 日次バッチ (スクレイピング + 分析を一括実行)
 python scripts/daily_update.py
 
-# 5. 分析のみバッチ実行
+# 6. 分析のみバッチ実行
 python scripts/daily_update.py --analyze-only
 ```
 
