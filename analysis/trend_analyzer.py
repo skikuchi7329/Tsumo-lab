@@ -14,6 +14,7 @@ from typing import Any, Sequence
 
 from database.db_handler import SlotDatabase
 from utils.date_helper import get_date_attributes
+from utils.machine_alias import MachineAliasResolver
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class MachineTrend:
     avg_payout_rate: float = 0.0  # 平均出率 (%)
     avg_g_count: float = 0.0  # 平均G数
     zentai_count: int = 0  # 全台系発生回数
+    zentai_dates: list[str] = field(default_factory=list)  # 全台系になった日付リスト
 
 
 @dataclass
@@ -83,15 +85,23 @@ ZENTAI_AVG_DIFF_THRESHOLD = 1000  # 平均差枚 +1000 以上
 class TrendAnalyzer:
     """SlotDatabase の machine_stats データを読み出して傾向分析を行う."""
 
-    def __init__(self, db: SlotDatabase) -> None:
+    def __init__(
+        self,
+        db: SlotDatabase,
+        alias_resolver: MachineAliasResolver | None = None,
+    ) -> None:
         self._db = db
+        self._alias = alias_resolver or MachineAliasResolver()
 
     # ------------------------------------------------------------------
     # 内部: DB からデータ取得
     # ------------------------------------------------------------------
     def _load_stats(self, shop_id: str) -> list[dict[str, Any]]:
-        """指定店舗の全 machine_stats を読み込む."""
-        return self._db.fetch_machine_stats(shop_id=shop_id)
+        """指定店舗の全 machine_stats を読み込み、名寄せを適用する."""
+        rows = self._db.fetch_machine_stats(shop_id=shop_id)
+        for r in rows:
+            r["machine_name"] = self._alias.resolve(r["machine_name"])
+        return rows
 
     def _all_dates_for_shop(self, shop_id: str) -> set[date]:
         """指定店舗のデータが存在する全日付を set で返す."""
@@ -138,12 +148,14 @@ class TrendAnalyzer:
             avg_wr = sum(r["win_rate"] for r in items) / n
             avg_pr = sum(r["payout_rate"] for r in items) / n
             avg_gc = sum(r["avg_g_count"] for r in items) / n
-            zentai = sum(
-                1
-                for r in items
-                if r["win_rate"] >= ZENTAI_WIN_RATE_THRESHOLD
-                and r["avg_diff_payout"] >= ZENTAI_AVG_DIFF_THRESHOLD
-            )
+            zentai_dates: list[str] = []
+            for r in items:
+                if (
+                    r["win_rate"] >= ZENTAI_WIN_RATE_THRESHOLD
+                    and r["avg_diff_payout"] >= ZENTAI_AVG_DIFF_THRESHOLD
+                ):
+                    zentai_dates.append(r["date"])
+            zentai_dates.sort()
             trends.append(
                 MachineTrend(
                     machine_name=name,
@@ -152,7 +164,8 @@ class TrendAnalyzer:
                     avg_win_rate=round(avg_wr, 1),
                     avg_payout_rate=round(avg_pr, 1),
                     avg_g_count=round(avg_gc, 1),
-                    zentai_count=zentai,
+                    zentai_count=len(zentai_dates),
+                    zentai_dates=zentai_dates,
                 )
             )
         # 平均差枚降順でソート
@@ -255,8 +268,23 @@ class TrendAnalyzer:
 # ---------------------------------------------------------------------------
 # Markdown レポート生成
 # ---------------------------------------------------------------------------
-def _fmt_rank_table(ranks: list[TsumoRank], top_n: int = 5) -> str:
-    """TsumoRank リストを Markdown テーブルに変換する."""
+def _build_zentai_dates_map(trends: list[MachineTrend]) -> dict[str, list[str]]:
+    """MachineTrend リストから {機種名: [全台系日付...]} マップを構築する."""
+    return {t.machine_name: t.zentai_dates for t in trends if t.zentai_dates}
+
+
+def _fmt_rank_table(
+    ranks: list[TsumoRank],
+    top_n: int = 5,
+    zentai_dates_map: dict[str, list[str]] | None = None,
+) -> str:
+    """TsumoRank リストを Markdown テーブルに変換する.
+
+    Args:
+        ranks: ランキングリスト
+        top_n: 表示件数
+        zentai_dates_map: {機種名: [日付, ...]} の全台系日付マップ (あれば表示)
+    """
     lines = [
         "| 順位 | 機種 | スコア | 平均差枚 | 勝率 | 全台系 | データ数 |",
         "|---:|:---|---:|---:|---:|---:|---:|",
@@ -267,6 +295,20 @@ def _fmt_rank_table(ranks: list[TsumoRank], top_n: int = 5) -> str:
             f"| {r.avg_diff_payout:+.0f} | {r.avg_win_rate:.1f}% "
             f"| {r.zentai_count} | {r.data_count} |"
         )
+    # 全台系日付の詳細を追記
+    if zentai_dates_map:
+        details: list[str] = []
+        for r in ranks[:top_n]:
+            dates = zentai_dates_map.get(r.machine_name, [])
+            if dates:
+                details.append(f"- **{r.machine_name}**: {', '.join(dates)}")
+        if details:
+            lines.append("")
+            lines.append("<details><summary>全台系の実績日</summary>")
+            lines.append("")
+            lines.extend(details)
+            lines.append("")
+            lines.append("</details>")
     return "\n".join(lines)
 
 
@@ -282,6 +324,18 @@ def _fmt_trend_table(trends: list[MachineTrend], top_n: int = 10) -> str:
             f"| {t.avg_win_rate:.1f}% | {t.avg_payout_rate:.1f}% "
             f"| {t.avg_g_count:.0f} | {t.zentai_count} | {t.count} |"
         )
+    # 全台系日付の詳細
+    details: list[str] = []
+    for t in trends[:top_n]:
+        if t.zentai_dates:
+            details.append(f"- **{t.machine_name}**: {', '.join(t.zentai_dates)}")
+    if details:
+        lines.append("")
+        lines.append("<details><summary>全台系の実績日</summary>")
+        lines.append("")
+        lines.extend(details)
+        lines.append("")
+        lines.append("</details>")
     return "\n".join(lines)
 
 
@@ -318,16 +372,19 @@ def generate_report(
         ranks = result.tsumo_ranks.get(suffix, [])
         if not ranks:
             continue
+        # 対応する trends から全台系日付マップを構築
+        zdmap = _build_zentai_dates_map(result.day_suffix_trends.get(suffix, []))
         lines.append(f"## {suffix}の日 おすすめ機種 TOP5")
         lines.append("")
-        lines.append(_fmt_rank_table(ranks, top_n=5))
+        lines.append(_fmt_rank_table(ranks, top_n=5, zentai_dates_map=zdmap))
         lines.append("")
 
     # --- ゾロ目日 ---
     if result.zoro_tsumo_ranks:
+        zdmap = _build_zentai_dates_map(result.zoro_trends)
         lines.append("## ゾロ目の日 おすすめ機種 TOP5")
         lines.append("")
-        lines.append(_fmt_rank_table(result.zoro_tsumo_ranks, top_n=5))
+        lines.append(_fmt_rank_table(result.zoro_tsumo_ranks, top_n=5, zentai_dates_map=zdmap))
         lines.append("")
 
     # --- 新装開店で強かった機種 ---

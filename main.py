@@ -26,10 +26,9 @@ from scrapers.min_repo_scraper import (
     parse_report_page_from_html,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+from utils.logger import setup_logging
+
+setup_logging()
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parent
