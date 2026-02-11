@@ -10,7 +10,9 @@ NOTE: CSS セレクタは定数 (SELECTORS) にまとめているので、
 from __future__ import annotations
 
 import logging
+import random
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -59,23 +61,48 @@ class ReportLink:
 
 
 # ---------------------------------------------------------------------------
-# HTTP セッション
+# HTTP セッション — ブラウザに近いヘッダでボット判定を回避
 # ---------------------------------------------------------------------------
-def _create_session(user_agent: str) -> requests.Session:
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": user_agent,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
-    })
-    return session
-
-
 DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/131.0.0.0 Safari/537.36"
 )
+
+# スリープ間隔 (秒) — リクエスト間にランダムな待機を入れる
+SLEEP_MIN = 3.0
+SLEEP_MAX = 5.0
+
+
+def _create_session(user_agent: str) -> requests.Session:
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": user_agent or DEFAULT_UA,
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;"
+            "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+        ),
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://min-repo.com/",
+        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
+    })
+    return session
+
+
+def _random_sleep() -> None:
+    """リクエスト間に 3〜5 秒のランダムな待機を入れる."""
+    delay = random.uniform(SLEEP_MIN, SLEEP_MAX)
+    logger.debug("Sleeping %.1f seconds", delay)
+    time.sleep(delay)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +197,9 @@ def fetch_report_urls(
             url = f"{base_url}/tag/{tag_name}/"
         else:
             url = f"{base_url}/tag/{tag_name}/page/{page}/"
+
+        if page > 1:
+            _random_sleep()
 
         logger.info("Fetching tag page: %s", url)
         resp = session.get(url, timeout=30)

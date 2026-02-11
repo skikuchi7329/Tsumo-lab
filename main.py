@@ -9,6 +9,7 @@ config/config.yaml の全店舗に対して:
 from __future__ import annotations
 
 import logging
+import random
 import time
 from pathlib import Path
 
@@ -80,8 +81,10 @@ def run() -> None:
             except Exception:
                 logger.exception("    -> Failed to parse: %s", link.url)
 
-            # サーバー負荷軽減
-            time.sleep(interval)
+            # サーバー負荷軽減 — 3〜5秒のランダム待機
+            delay = random.uniform(3.0, 5.0)
+            logger.debug("Sleeping %.1f seconds", delay)
+            time.sleep(delay)
 
         # CSV に追記保存
         if all_records:
