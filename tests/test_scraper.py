@@ -13,9 +13,11 @@ import pytest
 
 from scrapers.min_repo_scraper import (
     ReportLink,
+    _extract_shop_part,
     _parse_date_from_title,
     _safe_int,
     fetch_report_urls_from_html,
+    filter_links_by_shop,
     parse_machine_stats_from_html,
     parse_report_page_from_html,
 )
@@ -838,3 +840,74 @@ class TestIntegration:
             assert abs(db_row["payout_rate"] - rec.payout_rate) < 0.01
 
         db.close()
+
+
+# =====================================================================
+# filter_links_by_shop (店舗名フィルタ)
+# =====================================================================
+class TestFilterLinksByShop:
+    def _make_links(self) -> list[ReportLink]:
+        """実際のみんレポのタグページで見られるパターンを再現."""
+        return [
+            ReportLink("https://min-repo.com/100/", datetime(2026, 2, 10), "2/10(火)"),
+            ReportLink("https://min-repo.com/101/", datetime(2026, 2, 9), "2/9(月)"),
+            ReportLink("https://min-repo.com/102/", datetime(2026, 2, 8), "2/8(日) クラウン 大阪府"),
+            ReportLink("https://min-repo.com/103/", datetime(2026, 2, 7), "2/7(土) 京都駅前ラッキー"),
+            ReportLink("https://min-repo.com/104/", datetime(2026, 2, 7), "2/7(土) 飯田橋プレサス"),
+            ReportLink("https://min-repo.com/105/", datetime(2026, 2, 7), "2/7(土)"),
+            ReportLink("https://min-repo.com/106/", datetime(2026, 2, 6), "2/6(金)"),
+            ReportLink("https://min-repo.com/107/", datetime(2026, 2, 6), "2/6(金) ジール東中島店"),
+            ReportLink("https://min-repo.com/108/", datetime(2025, 6, 7), "2025/6/7(土) レイト荒川沖"),
+        ]
+
+    def test_filter_removes_other_shops(self):
+        """他店舗のレポートが除外されること."""
+        links = self._make_links()
+        filtered = filter_links_by_shop(links, ["麗都荒川沖", "レイト荒川沖"])
+        titles = [l.title for l in filtered]
+
+        # 日付のみ (店名なし) → 通過
+        assert "2/10(火)" in titles
+        assert "2/9(月)" in titles
+        assert "2/7(土)" in titles
+        assert "2/6(金)" in titles
+
+        # キーワード一致 → 通過
+        assert "2025/6/7(土) レイト荒川沖" in titles
+
+        # 他店舗 → 除外
+        assert "2/8(日) クラウン 大阪府" not in titles
+        assert "2/7(土) 京都駅前ラッキー" not in titles
+        assert "2/7(土) 飯田橋プレサス" not in titles
+        assert "2/6(金) ジール東中島店" not in titles
+
+    def test_filter_count(self):
+        links = self._make_links()
+        filtered = filter_links_by_shop(links, ["麗都荒川沖", "レイト荒川沖"])
+        assert len(filtered) == 5  # 日付のみ4件 + レイト荒川沖1件
+
+    def test_no_keywords_returns_all(self):
+        """title_keywords が None なら全件返す."""
+        links = self._make_links()
+        filtered = filter_links_by_shop(links, None)
+        assert len(filtered) == len(links)
+
+    def test_empty_keywords_returns_all(self):
+        """title_keywords が空リストなら全件返す."""
+        links = self._make_links()
+        filtered = filter_links_by_shop(links, [])
+        assert len(filtered) == len(links)
+
+
+class TestExtractShopPart:
+    def test_date_only(self):
+        assert _extract_shop_part("2/10(火)") == ""
+
+    def test_with_shop_name(self):
+        assert _extract_shop_part("2/8(日) クラウン 大阪府") == "クラウン 大阪府"
+
+    def test_full_date_with_shop(self):
+        assert _extract_shop_part("2025/6/7(土) レイト荒川沖") == "レイト荒川沖"
+
+    def test_full_date_without_shop(self):
+        assert _extract_shop_part("2025/6/7(土)") == ""

@@ -22,6 +22,7 @@ from database.db_handler import FetchedURLStore, SlotDatabase
 from models.schema import MachineStats, SlotData, to_dataframe
 from scrapers.min_repo_scraper import (
     fetch_report_urls,
+    filter_links_by_shop,
     parse_machine_stats_from_html,
     parse_report_page_from_html,
 )
@@ -79,7 +80,14 @@ def cmd_scrape() -> None:
                 tag_name=tag_name,
                 user_agent=user_agent,
             )
-            logger.info("Found %d report links for %s", len(report_links), shop_name)
+            logger.info("Found %d report links on tag page", len(report_links))
+
+            # 店舗名でフィルタ (他店舗のレポートを除外)
+            title_keywords = shop.get("title_keywords")
+            report_links = filter_links_by_shop(report_links, title_keywords)
+            logger.info(
+                "After shop filter: %d links for %s", len(report_links), shop_name
+            )
 
             all_slot_records: list[SlotData] = []
             all_machine_stats: list[MachineStats] = []
@@ -198,6 +206,43 @@ def cmd_analyze(shop_id: str | None = None, console: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
+# reset-db コマンド
+# ---------------------------------------------------------------------------
+def cmd_reset_db() -> None:
+    """DB と取得済みURL記録をリセットする (汚染データのクリーンアップ用)."""
+    import os
+
+    db_path = DATA_DIR / "tsumo.db"
+    url_store_path = DATA_DIR / "fetched_urls.json"
+    csv_files = list(DATA_DIR.glob("*.csv")) if DATA_DIR.exists() else []
+
+    targets = []
+    if db_path.exists():
+        targets.append(db_path)
+    if url_store_path.exists():
+        targets.append(url_store_path)
+    targets.extend(csv_files)
+
+    if not targets:
+        logger.info("No data files to reset.")
+        return
+
+    logger.info("The following files will be deleted:")
+    for f in targets:
+        logger.info("  %s", f)
+
+    confirm = input("\n本当にリセットしますか？ [y/N]: ").strip().lower()
+    if confirm != "y":
+        logger.info("Reset cancelled.")
+        return
+
+    for f in targets:
+        f.unlink()
+        logger.info("Deleted: %s", f)
+    logger.info("Reset complete. Run 'python main.py scrape' to re-collect data.")
+
+
+# ---------------------------------------------------------------------------
 # CLI エントリポイント
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -216,12 +261,17 @@ def main() -> None:
         "--console", action="store_true", help="コンソールにもレポートを表示"
     )
 
+    # reset-db
+    sub.add_parser("reset-db", help="DB / CSV / URL記録をリセット (汚染データの除去用)")
+
     args = parser.parse_args()
 
     if args.command == "scrape":
         cmd_scrape()
     elif args.command == "analyze":
         cmd_analyze(shop_id=args.shop_id, console=args.console)
+    elif args.command == "reset-db":
+        cmd_reset_db()
     else:
         # 後方互換: 引数なしは scrape
         cmd_scrape()

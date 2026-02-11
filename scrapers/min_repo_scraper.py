@@ -62,6 +62,54 @@ class ReportLink:
     title: str
 
 
+# タイトルから日付 + 曜日部分を除去して店舗名部分だけを残す正規表現
+_TITLE_DATE_PREFIX = re.compile(
+    r"^(?:\d{4})?/?(?:\d{1,2})/(?:\d{1,2})\s*(?:\([^)]*\))?\s*"
+)
+
+
+def _extract_shop_part(title: str) -> str:
+    """タイトルから日付部分を除去して店舗名部分を返す.
+
+    例: "2/10(火)" → ""  (日付のみ = 対象店舗)
+        "2/7(土) 京都駅前ラッキー" → "京都駅前ラッキー"
+    """
+    return _TITLE_DATE_PREFIX.sub("", title).strip()
+
+
+def filter_links_by_shop(
+    links: list[ReportLink],
+    title_keywords: list[str] | None = None,
+) -> list[ReportLink]:
+    """レポートリンクを店舗名でフィルタリングする.
+
+    対象とするレポート:
+      1. タイトルが「日付のみ」(店舗名部分が空) → タグ対象店舗のレポート
+      2. タイトルに title_keywords のいずれかが含まれる
+
+    Args:
+        links: フィルタ前のレポートリンク一覧
+        title_keywords: 対象店舗のキーワードリスト (例: ["麗都荒川沖", "レイト荒川沖"])
+
+    Returns:
+        フィルタ後のリスト
+    """
+    if not title_keywords:
+        return links
+
+    filtered: list[ReportLink] = []
+    for link in links:
+        shop_part = _extract_shop_part(link.title)
+        if not shop_part:
+            # 日付のみ = タグ対象店舗
+            filtered.append(link)
+        elif any(kw in link.title for kw in title_keywords):
+            filtered.append(link)
+        else:
+            logger.debug("  [FILTER] Skipped (other shop): %s", link.title)
+    return filtered
+
+
 # ---------------------------------------------------------------------------
 # HTTP セッション — ブラウザに近いヘッダでボット判定を回避
 # ---------------------------------------------------------------------------
