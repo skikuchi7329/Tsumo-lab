@@ -1,12 +1,14 @@
-"""パチスロ台ごとのデータスキーマ定義.
+"""パチスロデータスキーマ定義.
 
-1台・1日分のスロットデータを SlotData dataclass で管理し、
+SlotData: 1台・1日分の台別データ (台番号, G数, 差枚, BB, RB)
+MachineStats: 1機種・1日分の集計データ (平均差枚, 平均G数, 勝率, 出率)
+
 pandas DataFrame との相互変換をサポートする。
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from typing import Any
 
@@ -115,3 +117,71 @@ def from_dataframe(df: pd.DataFrame) -> list[SlotData]:
             )
         )
     return records
+
+
+# ---------------------------------------------------------------------------
+# MachineStats: 機種別集計データ
+# ---------------------------------------------------------------------------
+MACHINE_STATS_DTYPES: dict[str, str] = {
+    "date": "datetime64[ns]",
+    "shop_id": "str",
+    "machine_name": "str",
+    "unit_count": "int16",
+    "avg_diff_payout": "int32",
+    "avg_g_count": "int32",
+    "win_rate": "float64",
+    "payout_rate": "float64",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class MachineStats:
+    """1機種・1日分の集計データを格納する不変レコード.
+
+    みんレポのレポートページに掲載される機種別サマリーテーブルの
+    1行分に対応する。
+
+    Attributes:
+        date: 営業日
+        shop_id: 店舗ID
+        machine_name: 機種名 (評価記号除去済み)
+        unit_count: 台数
+        avg_diff_payout: 平均差枚
+        avg_g_count: 平均G数
+        win_rate: 勝率 (パーセント値: 80.0 = 80%)
+        payout_rate: 出率 (パーセント値: 112.3 = 112.3%)
+    """
+
+    date: datetime
+    shop_id: str
+    machine_name: str
+    unit_count: int
+    avg_diff_payout: int
+    avg_g_count: int
+    win_rate: float
+    payout_rate: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MachineStats:
+        d = dict(data)
+        if isinstance(d["date"], str):
+            d["date"] = datetime.fromisoformat(d["date"])
+        return cls(**d)
+
+
+MACHINE_STATS_COLUMNS: list[str] = list(MACHINE_STATS_DTYPES.keys())
+
+
+def machine_stats_to_dataframe(records: list[MachineStats]) -> pd.DataFrame:
+    """MachineStats のリストを pandas DataFrame に変換する."""
+    if not records:
+        df = pd.DataFrame(columns=MACHINE_STATS_COLUMNS)
+    else:
+        df = pd.DataFrame([r.to_dict() for r in records])
+    for col, dtype in MACHINE_STATS_DTYPES.items():
+        if col in df.columns:
+            df[col] = df[col].astype(dtype)
+    return df

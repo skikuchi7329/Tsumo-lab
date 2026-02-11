@@ -16,6 +16,7 @@ from scrapers.min_repo_scraper import (
     _parse_date_from_title,
     _safe_int,
     fetch_report_urls_from_html,
+    parse_machine_stats_from_html,
     parse_report_page_from_html,
 )
 
@@ -134,6 +135,77 @@ TAG_PAGE_FLAT_HTML = textwrap.dedent("""\
       <a href="/about/">サイトについて</a>
     </div>
     </body></html>
+""")
+
+# --- 機種別サマリーテーブル + 台別テーブルの混在ページ ---
+# みんレポのレポートページを再現: 先頭にサマリー、続いて台別データ
+REPORT_PAGE_WITH_SUMMARY_HTML = textwrap.dedent("""\
+    <!DOCTYPE html>
+    <html lang="ja">
+    <head><title>2025/6/7(土) レイト荒川沖 – みんレポ</title></head>
+    <body>
+    <main class="site-main">
+    <article>
+      <div class="entry-content">
+        <h2>機種別データ</h2>
+        <table class="kishu-summary">
+          <tr><th>機種</th><th>台数</th><th>平均差枚</th><th>平均G数</th><th>勝率</th><th>出率</th></tr>
+          <tr><td>◎ マイジャグラーV</td><td>10</td><td>+1,200</td><td>7,500</td><td>80%</td><td>112.3%</td></tr>
+          <tr><td>ハッピージャグラーVIII</td><td>8</td><td>-300</td><td>6,200</td><td>37.5%</td><td>98.5%</td></tr>
+          <tr><td>☆ アイムジャグラーEX</td><td>5</td><td>+2,500</td><td>8,100</td><td>100%</td><td>115.0%</td></tr>
+          <tr><td>◯ ゴーゴージャグラー3</td><td>3</td><td>+800</td><td>5,500</td><td>66.7%</td><td>107.2%</td></tr>
+        </table>
+
+        <h3>マイジャグラーV</h3>
+        <table>
+          <tr><th>台番号</th><th>G数</th><th>差枚</th><th>BB</th><th>RB</th></tr>
+          <tr><td>301</td><td>8,432</td><td>+2,150</td><td>32</td><td>18</td></tr>
+          <tr><td>302</td><td>6,218</td><td>-500</td><td>18</td><td>12</td></tr>
+          <tr><td>303</td><td>7,891</td><td>+1,800</td><td>28</td><td>21</td></tr>
+        </table>
+
+        <h3>ハッピージャグラーVIII</h3>
+        <table>
+          <tr><th>台番号</th><th>G数</th><th>差枚</th><th>BB</th><th>RB</th></tr>
+          <tr><td>501</td><td>5,104</td><td>−1,200</td><td>12</td><td>8</td></tr>
+          <tr><td>502</td><td>9,320</td><td>+3,500</td><td>35</td><td>22</td></tr>
+          <tr><td>503</td><td>4,560</td><td>-800</td><td>10</td><td>6</td></tr>
+        </table>
+      </div>
+    </article>
+    </main>
+    </body>
+    </html>
+""")
+
+# --- 空文字や欠損値を含むテーブル ---
+REPORT_PAGE_EMPTY_CELLS_HTML = textwrap.dedent("""\
+    <!DOCTYPE html>
+    <html lang="ja"><head><title>test</title></head>
+    <body>
+    <h3>テスト機種</h3>
+    <table>
+      <tr><th>台番号</th><th>G数</th><th>差枚</th><th>BB</th><th>RB</th></tr>
+      <tr><td>101</td><td></td><td></td><td>5</td><td>3</td></tr>
+      <tr><td>102</td><td>3,000</td><td>-</td><td></td><td></td></tr>
+      <tr><td>103</td><td>5,000</td><td>+500</td><td>20</td><td>10</td></tr>
+    </table>
+    </body>
+    </html>
+""")
+
+# --- 全角数字・全角マイナスを含むテーブル ---
+REPORT_PAGE_FULLWIDTH_HTML = textwrap.dedent("""\
+    <!DOCTYPE html>
+    <html lang="ja"><head><title>test</title></head>
+    <body>
+    <h3>全角テスト機種</h3>
+    <table>
+      <tr><th>台番号</th><th>G数</th><th>差枚</th><th>BB</th><th>RB</th></tr>
+      <tr><td>２０１</td><td>５，０００</td><td>−１，２００</td><td>１５</td><td>８</td></tr>
+    </table>
+    </body>
+    </html>
 """)
 
 
@@ -320,6 +392,139 @@ class TestParseReportPageFromHtml:
         )
         assert records == []
 
+    def test_empty_cells_handled(self):
+        """空セルが 0 として処理されること."""
+        records = parse_report_page_from_html(
+            REPORT_PAGE_EMPTY_CELLS_HTML,
+            report_date=datetime(2025, 1, 1),
+            shop_id="001",
+        )
+        assert len(records) == 3
+        r101 = [r for r in records if r.unit_number == 101][0]
+        assert r101.g_count == 0       # 空文字 → 0
+        assert r101.diff_payout == 0   # 空文字 → 0
+        assert r101.bb_count == 5
+        assert r101.rb_count == 3
+
+        r102 = [r for r in records if r.unit_number == 102][0]
+        assert r102.g_count == 3000
+        assert r102.diff_payout == 0   # "-" → 0
+        assert r102.bb_count == 0      # 空文字 → 0
+        assert r102.rb_count == 0      # 空文字 → 0
+
+    def test_fullwidth_numbers(self):
+        """全角数字・全角マイナスが正しく変換されること."""
+        records = parse_report_page_from_html(
+            REPORT_PAGE_FULLWIDTH_HTML,
+            report_date=datetime(2025, 1, 1),
+            shop_id="001",
+        )
+        assert len(records) == 1
+        r = records[0]
+        assert r.unit_number == 201
+        assert r.g_count == 5000
+        assert r.diff_payout == -1200
+        assert r.bb_count == 15
+        assert r.rb_count == 8
+
+    def test_mixed_page_only_detail_tables(self):
+        """サマリー + 台別テーブル混在ページで台別のみ抽出されること."""
+        records = parse_report_page_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        # サマリーテーブルはスキップされ、台別テーブルのみ (2機種 × 3台 = 6)
+        assert len(records) == 6
+        unit_numbers = [r.unit_number for r in records]
+        assert 301 in unit_numbers
+        assert 502 in unit_numbers
+
+
+# =====================================================================
+# parse_machine_stats_from_html (サマリーテーブルパース)
+# =====================================================================
+class TestParseMachineStatsFromHtml:
+    def test_summary_table_extracted(self):
+        """サマリーテーブルから4機種分のデータが取れること."""
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        assert len(stats) == 4
+
+    def test_machine_names_stripped(self):
+        """評価記号 (◎☆◯) が機種名から除去されること."""
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        names = {s.machine_name for s in stats}
+        assert "マイジャグラーV" in names
+        assert "アイムジャグラーEX" in names
+        assert "ゴーゴージャグラー3" in names
+        # 記号なしも正常
+        assert "ハッピージャグラーVIII" in names
+
+    def test_first_stat_values(self):
+        """マイジャグラーVの集計値が正しく取れること."""
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        mj = [s for s in stats if s.machine_name == "マイジャグラーV"][0]
+        assert mj.unit_count == 10
+        assert mj.avg_diff_payout == 1200
+        assert mj.avg_g_count == 7500
+        assert mj.win_rate == 80.0
+        assert mj.payout_rate == 112.3
+
+    def test_negative_avg_diff(self):
+        """平均差枚がマイナスの場合."""
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        hj = [s for s in stats if s.machine_name == "ハッピージャグラーVIII"][0]
+        assert hj.avg_diff_payout == -300
+        assert hj.win_rate == 37.5
+        assert hj.payout_rate == 98.5
+
+    def test_shop_id_and_date_propagated(self):
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        for s in stats:
+            assert s.shop_id == "153"
+            assert s.date == datetime(2025, 6, 7)
+
+    def test_no_summary_table(self):
+        """サマリーテーブルがないページでは空リストが返ること."""
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        assert stats == []
+
+    def test_hundred_percent_win_rate(self):
+        """勝率100%の機種."""
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        aim = [s for s in stats if s.machine_name == "アイムジャグラーEX"][0]
+        assert aim.win_rate == 100.0
+        assert aim.payout_rate == 115.0
+        assert aim.avg_diff_payout == 2500
+
 
 # =====================================================================
 # FetchedURLStore (database)
@@ -351,6 +556,168 @@ class TestFetchedURLStore:
 
 
 # =====================================================================
+# SlotDatabase (SQLite)
+# =====================================================================
+class TestSlotDatabase:
+    def test_insert_and_count_slot_data(self, tmp_path):
+        from database.db_handler import SlotDatabase
+        from models.schema import SlotData
+
+        db = SlotDatabase(tmp_path / "test.db")
+        records = parse_report_page_from_html(
+            REPORT_PAGE_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        inserted = db.insert_slot_data(records)
+        assert inserted == 6
+        assert db.count_slot_data() == 6
+        assert db.count_slot_data(shop_id="153") == 6
+        assert db.count_slot_data(date="2025-06-07") == 6
+        db.close()
+
+    def test_insert_and_count_machine_stats(self, tmp_path):
+        from database.db_handler import SlotDatabase
+
+        db = SlotDatabase(tmp_path / "test.db")
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        inserted = db.insert_machine_stats(stats)
+        assert inserted == 4
+        assert db.count_machine_stats() == 4
+        assert db.count_machine_stats(shop_id="153") == 4
+        db.close()
+
+    def test_duplicate_prevention(self, tmp_path):
+        """同じデータを2回挿入しても重複しないこと."""
+        from database.db_handler import SlotDatabase
+
+        db = SlotDatabase(tmp_path / "test.db")
+        records = parse_report_page_from_html(
+            REPORT_PAGE_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        db.insert_slot_data(records)
+        db.insert_slot_data(records)  # 2回目
+        assert db.count_slot_data() == 6  # 重複しない
+        db.close()
+
+    def test_fetch_slot_data(self, tmp_path):
+        from database.db_handler import SlotDatabase
+
+        db = SlotDatabase(tmp_path / "test.db")
+        records = parse_report_page_from_html(
+            REPORT_PAGE_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        db.insert_slot_data(records)
+        rows = db.fetch_slot_data(shop_id="153")
+        assert len(rows) == 6
+        # 各行が辞書であること
+        assert "machine_name" in rows[0]
+        assert "unit_number" in rows[0]
+        assert "diff_payout" in rows[0]
+        db.close()
+
+    def test_fetch_machine_stats(self, tmp_path):
+        from database.db_handler import SlotDatabase
+
+        db = SlotDatabase(tmp_path / "test.db")
+        stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        db.insert_machine_stats(stats)
+        rows = db.fetch_machine_stats(shop_id="153")
+        assert len(rows) == 4
+        assert "machine_name" in rows[0]
+        assert "avg_diff_payout" in rows[0]
+        assert "win_rate" in rows[0]
+        assert "payout_rate" in rows[0]
+        db.close()
+
+    def test_context_manager(self, tmp_path):
+        from database.db_handler import SlotDatabase
+
+        with SlotDatabase(tmp_path / "test.db") as db:
+            records = parse_report_page_from_html(
+                REPORT_PAGE_HTML,
+                report_date=datetime(2025, 6, 7),
+                shop_id="153",
+            )
+            db.insert_slot_data(records)
+            assert db.count_slot_data() == 6
+
+
+# =====================================================================
+# parser_helper
+# =====================================================================
+class TestParserHelper:
+    def test_safe_int_basic(self):
+        from utils.parser_helper import safe_int
+
+        assert safe_int("8,432") == 8432
+        assert safe_int("+2,150") == 2150
+        assert safe_int("-500") == -500
+        assert safe_int("") == 0
+        assert safe_int("-") == 0
+        assert safe_int("301") == 301
+
+    def test_safe_int_fullwidth(self):
+        from utils.parser_helper import safe_int
+
+        assert safe_int("５，０００") == 5000
+        assert safe_int("−１，２００") == -1200
+        assert safe_int("２０１") == 201
+
+    def test_safe_int_default_none(self):
+        from utils.parser_helper import safe_int
+
+        assert safe_int("", default=None) is None
+        assert safe_int("-", default=None) is None
+
+    def test_safe_float_basic(self):
+        from utils.parser_helper import safe_float
+
+        assert safe_float("112.3%") == 112.3
+        assert safe_float("80%") == 80.0
+        assert safe_float("98.5") == 98.5
+        assert safe_float("") == 0.0
+        assert safe_float("-") == 0.0
+
+    def test_safe_float_fullwidth(self):
+        from utils.parser_helper import safe_float
+
+        assert safe_float("１１２．３％") == 112.3
+
+    def test_strip_rating_symbol(self):
+        from utils.parser_helper import strip_rating_symbol
+
+        assert strip_rating_symbol("◎ マイジャグラーV") == "マイジャグラーV"
+        assert strip_rating_symbol("☆ アイムジャグラーEX") == "アイムジャグラーEX"
+        assert strip_rating_symbol("◯ ゴーゴージャグラー3") == "ゴーゴージャグラー3"
+        assert strip_rating_symbol("▲ テスト機種") == "テスト機種"
+        assert strip_rating_symbol("ハッピージャグラーVIII") == "ハッピージャグラーVIII"
+
+    def test_safe_int_various_minus_signs(self):
+        """各種マイナス記号が正しく処理されること."""
+        from utils.parser_helper import safe_int
+
+        # MINUS SIGN (U+2212)
+        assert safe_int("\u22121200") == -1200
+        # EN DASH (U+2013)
+        assert safe_int("\u2013500") == -500
+        # FULLWIDTH HYPHEN-MINUS (U+FF0D)
+        assert safe_int("\uFF0D800") == -800
+
+
+# =====================================================================
 # 統合テスト: Stage 1 → Stage 2
 # =====================================================================
 class TestIntegration:
@@ -377,3 +744,97 @@ class TestIntegration:
         # 各レポートの日付が正しく伝播している
         dates = {r.date for r in all_records}
         assert len(dates) == 3
+
+    def test_full_pipeline_with_sqlite(self, tmp_path):
+        """パース → SQLite 保存 → 読み出しの全フロー."""
+        from database.db_handler import SlotDatabase
+
+        db = SlotDatabase(tmp_path / "integration.db")
+
+        # サマリー + 台別の混在ページをパース
+        slot_records = parse_report_page_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+        machine_stats = parse_machine_stats_from_html(
+            REPORT_PAGE_WITH_SUMMARY_HTML,
+            report_date=datetime(2025, 6, 7),
+            shop_id="153",
+        )
+
+        # SQLite に保存
+        db.insert_slot_data(slot_records)
+        db.insert_machine_stats(machine_stats)
+
+        # 検証: slot_data
+        assert db.count_slot_data() == 6
+        slot_rows = db.fetch_slot_data(shop_id="153", date="2025-06-07")
+        assert len(slot_rows) == 6
+
+        # 検証: machine_stats
+        assert db.count_machine_stats() == 4
+        stat_rows = db.fetch_machine_stats(shop_id="153", date="2025-06-07")
+        assert len(stat_rows) == 4
+
+        # 値の正当性を確認
+        mj = [r for r in stat_rows if r["machine_name"] == "マイジャグラーV"][0]
+        assert mj["avg_diff_payout"] == 1200
+        assert mj["avg_g_count"] == 7500
+        assert mj["win_rate"] == 80.0
+        assert mj["payout_rate"] == 112.3
+        assert mj["unit_count"] == 10
+
+        # 台別データの値を確認
+        unit301 = [r for r in slot_rows if r["unit_number"] == 301][0]
+        assert unit301["g_count"] == 8432
+        assert unit301["diff_payout"] == 2150
+        assert unit301["machine_name"] == "マイジャグラーV"
+
+        db.close()
+
+    def test_no_data_loss(self, tmp_path):
+        """1ページの全データが漏れなくDBに入ること (タスク要件)."""
+        from database.db_handler import SlotDatabase
+
+        db = SlotDatabase(tmp_path / "no_loss.db")
+
+        html = REPORT_PAGE_WITH_SUMMARY_HTML
+        report_date = datetime(2025, 6, 7)
+        shop_id = "153"
+
+        # パース
+        slot_records = parse_report_page_from_html(html, report_date, shop_id)
+        machine_stats = parse_machine_stats_from_html(html, report_date, shop_id)
+
+        # 保存
+        db.insert_slot_data(slot_records)
+        db.insert_machine_stats(machine_stats)
+
+        # パース結果と DB の件数が一致すること
+        assert db.count_slot_data(shop_id=shop_id) == len(slot_records)
+        assert db.count_machine_stats(shop_id=shop_id) == len(machine_stats)
+
+        # 全レコードの値を1件ずつ検証 (DBはソート済みなので unit_number で検索)
+        db_slots = db.fetch_slot_data(shop_id=shop_id)
+        for rec in slot_records:
+            matched = [r for r in db_slots if r["unit_number"] == rec.unit_number]
+            assert len(matched) == 1, f"unit_number={rec.unit_number} not found in DB"
+            db_row = matched[0]
+            assert db_row["g_count"] == rec.g_count
+            assert db_row["diff_payout"] == rec.diff_payout
+            assert db_row["bb_count"] == rec.bb_count
+            assert db_row["rb_count"] == rec.rb_count
+            assert db_row["machine_name"] == rec.machine_name
+
+        db_stats = db.fetch_machine_stats(shop_id=shop_id)
+        for rec in machine_stats:
+            matched = [r for r in db_stats if r["machine_name"] == rec.machine_name]
+            assert len(matched) == 1, f"machine={rec.machine_name} not found in DB"
+            db_row = matched[0]
+            assert db_row["avg_diff_payout"] == rec.avg_diff_payout
+            assert db_row["avg_g_count"] == rec.avg_g_count
+            assert abs(db_row["win_rate"] - rec.win_rate) < 0.01
+            assert abs(db_row["payout_rate"] - rec.payout_rate) < 0.01
+
+        db.close()
