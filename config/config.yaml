@@ -21,10 +21,10 @@ shops:
       - "レイト荒川沖"
       - "レイト 荒川沖"
 
-  - name: "マルハン阿見"
+  - name: "アムズツインパーク"
     shop_id: "maruhan_ami"
     area: "茨城県"
-    day_suffix_targets: []
+    day_suffix_targets: [1, 4, 7]
     zoro_target: false
     notes: ""
     title_keywords:
