@@ -129,7 +129,7 @@ SLEEP_MIN = 3.0
 SLEEP_MAX = 5.0
 
 
-def _create_session(user_agent: str) -> requests.Session:
+def _create_session(user_agent: str, warmup: bool = True) -> requests.Session:
     session = requests.Session()
     session.headers.update({
         "User-Agent": user_agent or DEFAULT_UA,
@@ -150,6 +150,13 @@ def _create_session(user_agent: str) -> requests.Session:
         "Upgrade-Insecure-Requests": "1",
         "Connection": "keep-alive",
     })
+    if warmup:
+        # トップページにアクセスしてセッション/Cookieを確立する
+        try:
+            session.get("https://min-repo.com/", timeout=15)
+            time.sleep(1)
+        except Exception:
+            logger.debug("Session warmup failed, continuing anyway")
     return session
 
 
